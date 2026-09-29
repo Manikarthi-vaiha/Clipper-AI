@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clipper</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --text: #1c1b19; --muted: #6d6a64; --line: #e4e1da;
+    --accent: #ffcf1f; --accent-ink: #1c1b19; --error: #c0392b; --track: #ebe8e1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121211; --card: #1c1c1a; --text: #f2f0eb; --muted: #9c998f; --line: #2d2c29;
+            --accent-ink: #1c1b19; --error: #ff7a6b; --track: #2a2926; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 56px 16px 80px; }
+  h1 { font-size: 34px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  h1 span { background: var(--accent); color: var(--accent-ink); padding: 0 8px; border-radius: 6px; }
+  .sub { color: var(--muted); margin: 0 0 28px; }
+  form { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .row { display: flex; gap: 10px; }
+  input[type=url] { flex: 1; min-width: 0; font: inherit; padding: 13px 14px; border-radius: 10px;
+                    border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { font: inherit; font-weight: 650; padding: 0 22px; border: 0; border-radius: 10px;
+           background: var(--accent); color: var(--accent-ink); cursor: pointer; white-space: nowrap; }
+  button:disabled { opacity: .5; cursor: default; }
+  .opts { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 14px; color: var(--muted); font-size: 14px; }
+  .opts label { display: flex; align-items: center; gap: 8px; }
+  .opts input { width: 64px; font: inherit; padding: 6px 8px; border-radius: 8px;
+                border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  #status { margin-top: 22px; background: var(--card); border: 1px solid var(--line);
+            border-radius: 14px; padding: 18px; display: none; }
+  .steps { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .step { font-size: 13px; padding: 4px 10px; border-radius: 99px; background: var(--track); color: var(--muted); }
+  .step.active { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .step.done { color: var(--text); }
+  .step.done::before { content: "✓ "; }
+  .headline { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+              flex-wrap: wrap; margin-bottom: 10px; }
+  .pct { font-size: 30px; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .eta { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .eta b { color: var(--text); font-weight: 650; }
+  .now { margin-top: 10px; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .now b { color: var(--text); font-weight: 600; }
+  .bar { height: 8px; background: var(--track); border-radius: 99px; overflow: hidden; }
+  .bar div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  .tail { margin-top: 10px; font: 12px/1.4 ui-monospace, Menlo, monospace; color: var(--muted);
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .error { color: var(--error); margin-top: 10px; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 18px; margin-top: 26px; }
+  .clip { background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+          display: flex; flex-direction: column; }
+  .clip video { width: 100%; aspect-ratio: 9/16; background: #000; display: block; }
+  .meta { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .title { font-weight: 650; font-size: 15px; line-height: 1.3; }
+  .info { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--muted); }
+  .score { background: var(--accent); color: var(--accent-ink); font-weight: 700; padding: 1px 8px; border-radius: 99px; }
+  .dl { margin-top: auto; text-align: center; text-decoration: none; font-weight: 600; font-size: 14px;
+        color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 8px; }
+  .dl:hover { border-color: var(--accent); }
+  @media (max-width: 560px) { .row { flex-direction: column; } button { padding: 12px; } h1 { font-size: 28px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Clipper <span>AI</span></h1>
+  <p class="sub">Paste a YouTube link. Get vertical short clips with word-by-word captions. Runs entirely on this Mac.</p>
+
+  <form id="form">
+    <div class="row">
+      <input id="url" type="url" required placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
+      <button id="go" type="submit">Get clips</button>
+    </div>
+    <div class="opts">
+      <label>Clips <input id="num" type="number" min="1" max="10" value="5"></label>
+      <label>Min length (s) <input id="min" type="number" min="10" max="120" value="25"></label>
+      <label>Max length (s) <input id="max" type="number" min="15" max="180" value="60"></label>
+      <label><input id="fast" type="checkbox" style="width:auto"> Fast mode (quicker, less accurate captions)</label>
+    </div>
+  </form>
+
+  <section id="status">
+    <div class="steps" id="steps"></div>
+    <div class="headline"><span class="pct" id="pct">0%</span><span class="eta" id="eta"></span></div>
+    <div class="bar"><div id="fill"></div></div>
+    <div class="now" id="now"></div>
+    <div class="tail" id="tail"></div>
+    <div class="error" id="err"></div>
+  </section>
+
+  <section id="grid"></section>
+</main>
+
+<script>
+const STEPS = ["Downloading video", "Transcribing speech", "Picking the best moments", "Rendering clips", "Done"];
+const STEP_OF = {download: 0, model: 1, transcribe: 1, pick: 2, render: 3};
+const $ = id => document.getElementById(id);
+let timer = null;
+
+function save(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} }
+function load(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+
+function fmt(s) { const m = Math.floor(s / 60); return m + ":" + String(Math.floor(s % 60)).padStart(2, "0"); }
+
+function fmtLeft(s) {
+  if (s == null) return "Estimating time…";
+  if (s < 10) return "<b>a few seconds</b> left";
+  if (s < 60) return `<b>${Math.round(s / 5) * 5} sec</b> left`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `about <b>${m} min</b> left`;
+  return `about <b>${Math.floor(m / 60)} h ${m % 60} min</b> left`;
+}
+
+function renderStatus(job) {
+  $("status").style.display = "block";
+  const idx = job.status === "done" ? STEPS.length - 1 : (STEP_OF[job.stage_key] ?? 0);
+  $("steps").innerHTML = STEPS.map((s, i) =>
+    `<span class="step ${i < idx || job.status === "done" ? "done" : i === idx ? "active" : ""}">${s}</span>`).join("");
+  const pct = job.status === "done" ? 100 : job.pct;
+  $("fill").style.width = pct + "%";
+  $("pct").textContent = Math.floor(pct) + "%";
+  if (job.status === "running") {
+    $("eta").innerHTML = fmtLeft(job.eta) + ` · ${fmt(job.elapsed)} elapsed`;
+    $("now").innerHTML = job.stage_key
+      ? `<b>${job.stage}</b> — ${job.stage_pct}%` : `<b>${job.stage}…</b>`;
+  } else if (job.status === "done") {
+    $("eta").innerHTML = `Finished in <b>${fmt(job.elapsed)}</b>`;
+    $("now").textContent = "";
+  } else {
+    $("eta").textContent = ""; $("now").textContent = "";
+  }
+  $("tail").textContent = "";
+  $("err").textContent = job.status === "error" ? "Something went wrong: " + job.error : "";
+}
+
+function renderClips(clips) {
+  $("grid").innerHTML = clips.map(c => `
+    <article class="clip">
+      <video src="${c.url}" controls playsinline preload="metadata"></video>
+      <div class="meta">
+        <div class="title"></div>
+        <div class="info"><span>${fmt(c.start)} – ${fmt(c.end)} · ${Math.round(c.end - c.start)}s</span>
+          <span class="score" title="Virality score">${c.score}</span></div>
+        <a class="dl" href="${c.url}?download=1">Download</a>
+      </div>
+    </article>`).join("");
+  [...$("grid").querySelectorAll(".title")].forEach((el, i) => el.textContent = clips[i].title);
+}
+
+async function poll(id) {
+  clearTimeout(timer);
+  const r = await fetch("/api/jobs/" + id);
+  if (!r.ok) { save("job", null); $("go").disabled = false; return; }
+  const job = await r.json();
+  renderStatus(job);
+  if (job.status === "running") { $("go").disabled = true; timer = setTimeout(() => poll(id), 1000); return; }
+  $("go").disabled = false;
+  if (job.status === "done") renderClips(job.clips);
+}
+
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  $("go").disabled = true;
+  $("grid").innerHTML = "";
+  const r = await fetch("/api/jobs", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({url: $("url").value, num: +$("num").value, min: +$("min").value, max: +$("max").value, fast: $("fast").checked}),
+  });
+  const data = await r.json();
+  if (!r.ok) {
+    $("status").style.display = "block"; $("steps").innerHTML = ""; $("tail").textContent = "";
+    $("err").textContent = data.error; $("go").disabled = false; return;
+  }
+  save("job", data.id);
+  poll(data.id);
+});
+
+const last = load("job");
+if (last) poll(last);
+</script>
+</body>
+</html>

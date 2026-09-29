@@ -1,0 +1,11 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Downloaded videos, audio, transcripts and rendered clips (large, regenerated per video)
+work/
+clips/
+
+# macOS
+.DS_Store
