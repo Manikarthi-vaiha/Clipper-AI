@@ -3,6 +3,7 @@
 
 Run:  .venv/bin/python app.py   then open http://localhost:8765
 """
+import dataclasses
 import json
 import re
 import subprocess
@@ -12,7 +13,10 @@ import time
 import uuid
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_from_directory
+import cv2
+from flask import Flask, Response, abort, jsonify, request, send_from_directory
+
+import clipper
 
 ROOT = Path(__file__).parent
 CLIPS = ROOT / "clips"
@@ -59,10 +63,68 @@ def estimate(job):
     return pct, eta
 
 
+def parse_style(data):
+    """Build a validated CaptionStyle from request JSON/args, falling back to defaults."""
+    d = clipper.CaptionStyle()
+    data = data or {}
+
+    def num(key, default, lo, hi):
+        try:
+            return max(lo, min(hi, int(float(data.get(key, default)))))
+        except (TypeError, ValueError):
+            return default
+
+    def colour(key, default):
+        v = str(data.get(key, default))
+        v = v if v.startswith("#") else "#" + v
+        return v.upper() if re.fullmatch(r"#[0-9a-fA-F]{6}", v) else default
+
+    def flag(key, default):
+        v = data.get(key, default)
+        return v if isinstance(v, bool) else str(v).lower() in ("1", "true", "on", "yes")
+
+    font = data.get("font", d.font)
+    return clipper.CaptionStyle(
+        font=font if font in clipper.available_fonts() else d.font,
+        size=num("size", d.size, 30, 200), text_color=colour("text_color", d.text_color),
+        highlight=colour("highlight", d.highlight), outline_color=colour("outline_color", d.outline_color),
+        outline=num("outline", d.outline, 0, 30), position=num("position", d.position, 5, 95),
+        words=num("words", d.words, 1, 6), uppercase=flag("uppercase", d.uppercase), pop=flag("pop", d.pop))
+
+
+def style_args(st):
+    args = ["--font", st.font, "--font-size", str(st.size), "--text-color", st.text_color,
+            "--highlight", st.highlight, "--outline-color", st.outline_color, "--outline", str(st.outline),
+            "--caption-pos", str(st.position), "--words", str(st.words)]
+    return args + ([] if st.uppercase else ["--no-uppercase"]) + ([] if st.pop else ["--no-pop"])
+
+
+_preview_bg = {}
+
+
+def preview_background():
+    """A 9:16 still from the most recently downloaded video, so the preview looks like a real clip."""
+    videos = sorted((ROOT / "work").glob("*/source.mp4"), key=lambda p: p.stat().st_mtime)
+    if not videos:
+        return None
+    src = videos[-1]
+    if src not in _preview_bg:
+        dur = clipper.probe_duration(src)
+        w, h = clipper.probe_size(src)
+        frame = next(clipper.read_frames(src, dur * 0.35, 1, w, h, 1), None)
+        if frame is None:
+            return None
+        cw = min(w, int(h * 9 / 16))
+        x0 = (w - cw) // 2
+        _preview_bg.clear()
+        _preview_bg[src] = cv2.resize(frame[:, x0:x0 + cw], (clipper.OUT_W, clipper.OUT_H))
+    return _preview_bg[src]
+
+
 def run_job(job):
     cmd = [sys.executable, "-u", str(ROOT / "clipper.py"), job["url"], "--num", str(job["num"]),
            "--min", str(job["min"]), "--max", str(job["max"]),
-           "--whisper", "small" if job["fast"] else "turbo"]
+           "--whisper", "small" if job["fast"] else "turbo", *style_args(job["style"])]
     proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     out_dir = None
     for line in proc.stdout:
@@ -108,6 +170,7 @@ def create_job():
                "stage_key": None, "stage_started": time.time(), "started": time.time(), "frac": 0.0,
                "est": 0.0, "rest": 0.0, "deadline": None, "pct": 0.0,
                "log": [], "tail": "", "fast": bool(data.get("fast")), "clips": [],
+               "style": parse_style(data.get("style")),
                "num": max(1, min(10, int(data.get("num", 5)))),
                "min": max(10, min(120, float(data.get("min", 25)))),
                "max": max(15, min(180, float(data.get("max", 60))))}
@@ -125,6 +188,19 @@ def get_job(job_id):
     return jsonify({k: job[k] for k in ("id", "status", "stage", "stage_key", "log", "tail", "clips", "num")}
                    | {"error": job.get("error"), "pct": round(pct, 1), "eta": None if eta is None else round(eta),
                       "stage_pct": round(job["frac"] * 100), "elapsed": round((job.get("ended") or time.time()) - job["started"])})
+
+
+@app.get("/api/fonts")
+def fonts():
+    return jsonify(fonts=list(clipper.available_fonts()), default=dataclasses.asdict(clipper.CaptionStyle()))
+
+
+@app.get("/api/preview")
+def preview():
+    frame = clipper.caption_preview(parse_style(request.args), preview_background())
+    small = cv2.resize(frame, (360, 640), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    return Response(buf.tobytes(), mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/clips/<path:name>")

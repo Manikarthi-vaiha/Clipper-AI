@@ -19,6 +19,7 @@ import sys
 import time
 import types
 import wave
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -29,7 +30,6 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).parent
 OUT_W, OUT_H = 1080, 1920
 FPS = 30
-FONT_PATH = "/System/Library/Fonts/Supplemental/Arial Black.ttf"
 WHISPER_MODELS = {
     "turbo": "mlx-community/whisper-large-v3-turbo",
     "small": "mlx-community/whisper-small-mlx",
@@ -511,24 +511,86 @@ def build_chunks(words, start, end, max_words=3):
     return chunks
 
 
-@lru_cache(maxsize=16)
-def font(size):
-    return ImageFont.truetype(FONT_PATH, size)
+# Caption fonts: name -> (file, face index inside a .ttc collection, variable-font style name).
+# Any .ttf/.otf dropped into the fonts/ folder is added automatically.
+SYS = "/System/Library/Fonts/"
+SUP = SYS + "Supplemental/"
+BUILTIN_FONTS = {
+    "Arial Black": (SUP + "Arial Black.ttf", 0, None),
+    "Impact": (SUP + "Impact.ttf", 0, None),
+    "SF Pro Heavy": (SYS + "SFNS.ttf", 0, "Heavy"),
+    "SF Pro Rounded Heavy": (SYS + "SFNSRounded.ttf", 0, "Heavy"),
+    "SF Pro Condensed Black": (SYS + "SFNS.ttf", 0, "Condensed Black"),
+    "Avenir Next Heavy": (SYS + "Avenir Next.ttc", 8, None),
+    "Avenir Next Condensed Heavy": (SYS + "Avenir Next Condensed.ttc", 8, None),
+    "Futura Condensed ExtraBold": (SUP + "Futura.ttc", 4, None),
+    "Futura Bold": (SUP + "Futura.ttc", 2, None),
+    "Helvetica Bold": (SYS + "Helvetica.ttc", 1, None),
+    "Arial Rounded Bold": (SUP + "Arial Rounded Bold.ttf", 0, None),
+    "Trebuchet MS Bold": (SUP + "Trebuchet MS Bold.ttf", 0, None),
+    "Verdana Bold": (SUP + "Verdana Bold.ttf", 0, None),
+    "Tahoma Bold": (SUP + "Tahoma Bold.ttf", 0, None),
+    "Georgia Bold": (SUP + "Georgia Bold.ttf", 0, None),
+    "Rockwell Bold": (SUP + "Rockwell.ttc", 2, None),
+    "Copperplate Bold": (SUP + "Copperplate.ttc", 2, None),
+    "Phosphate Solid": (SUP + "Phosphate.ttc", 1, None),
+    "Chalkboard SE Bold": (SUP + "ChalkboardSE.ttc", 2, None),
+    "Noteworthy Bold": (SYS + "Noteworthy.ttc", 1, None),
+    "Comic Sans MS Bold": (SUP + "Comic Sans MS Bold.ttf", 0, None),
+    "Bradley Hand Bold": (SUP + "Bradley Hand Bold.ttf", 0, None),
+    "Chalkduster": (SUP + "Chalkduster.ttf", 0, None),
+    "Courier New Bold": (SUP + "Courier New Bold.ttf", 0, None),
+}
+DEFAULT_FONT = "Arial Black"
 
 
-BASE_SIZE = 86
-HIGHLIGHT = (255, 229, 0, 255)
-WHITE = (255, 255, 255, 255)
+def available_fonts():
+    fonts = {k: v for k, v in BUILTIN_FONTS.items() if os.path.exists(v[0])}
+    for p in sorted((ROOT / "fonts").glob("*.[ot]tf")) if (ROOT / "fonts").exists() else []:
+        try:
+            family, style = ImageFont.truetype(str(p), 20).getname()
+            fonts[f"{family} {style}".replace(" Regular", "")] = (str(p), 0, None)
+        except OSError:
+            pass
+    return fonts
+
+
+def hex_rgba(value):
+    v = value.lstrip("#")
+    return tuple(int(v[i:i + 2], 16) for i in (0, 2, 4)) + (255,)
+
+
+@dataclass(frozen=True)
+class CaptionStyle:
+    font: str = DEFAULT_FONT
+    size: int = 86               # font size in px on the 1080x1920 frame
+    text_color: str = "#FFFFFF"
+    highlight: str = "#FFE500"   # colour of the word being spoken
+    outline_color: str = "#000000"
+    outline: int = 9             # outline width in px (0 = none)
+    position: int = 70           # vertical centre of the caption, % from the top
+    words: int = 3               # max words on screen at once
+    uppercase: bool = True
+    pop: bool = True             # enlarge the spoken word briefly
+
+
+@lru_cache(maxsize=32)
+def font(name, size):
+    path, index, variation = available_fonts().get(name) or BUILTIN_FONTS[DEFAULT_FONT]
+    f = ImageFont.truetype(path, size, index=index)
+    if variation:
+        f.set_variation_by_name(variation)
+    return f
 
 
 @lru_cache(maxsize=256)
-def render_caption(words, active, pop):
+def render_caption(words, active, pop, style):
     """Render one caption state to a BGRA numpy image. words: tuple of strings."""
-    f = font(BASE_SIZE)
+    f = font(style.font, style.size)
     space = f.getlength(" ")
     widths = [f.getlength(w) for w in words]
     lines, cur, cur_w = [], [], 0.0
-    for i, wd in enumerate(widths):  # wrap to max 2 lines within 940px
+    for i, wd in enumerate(widths):  # wrap to fit within 940px
         if cur and cur_w + space + wd > 940:
             lines.append(cur)
             cur, cur_w = [], 0.0
@@ -536,26 +598,27 @@ def render_caption(words, active, pop):
         cur.append(i)
     lines.append(cur)
 
-    line_h = int(BASE_SIZE * 1.25)
-    canvas = Image.new("RGBA", (OUT_W, line_h * len(lines) + 80), (0, 0, 0, 0))
+    pad = int(style.size * 0.5) + style.outline
+    line_h = int(style.size * 1.25)
+    canvas = Image.new("RGBA", (OUT_W, line_h * len(lines) + 2 * pad), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
+    text_rgba, hi_rgba, out_rgba = hex_rgba(style.text_color), hex_rgba(style.highlight), hex_rgba(style.outline_color)
     for li, line in enumerate(lines):
         total = sum(widths[i] for i in line) + space * (len(line) - 1)
         x = (OUT_W - total) / 2
-        cy = 40 + li * line_h + line_h / 2
+        cy = pad + li * line_h + line_h / 2
         for i in line:
             cx = x + widths[i] / 2
             is_active = i == active
-            ff = font(int(BASE_SIZE * pop)) if is_active else f
-            draw.text((cx, cy), words[i], font=ff, anchor="mm",
-                      fill=HIGHLIGHT if is_active else WHITE,
-                      stroke_width=9, stroke_fill=(0, 0, 0, 255))
+            ff = font(style.font, int(style.size * pop)) if is_active and pop != 1 else f
+            draw.text((cx, cy), words[i], font=ff, anchor="mm", fill=hi_rgba if is_active else text_rgba,
+                      stroke_width=style.outline, stroke_fill=out_rgba)
             x += widths[i] + space
     arr = np.array(canvas)
     return arr[:, :, [2, 1, 0, 3]]  # RGBA -> BGRA
 
 
-def caption_state(chunks, t):
+def caption_state(chunks, t, style):
     for c in chunks:
         if c[0]["start"] - 0.05 <= t < c[0]["chunk_end"]:
             active = 0
@@ -563,26 +626,45 @@ def caption_state(chunks, t):
                 if w["start"] <= t:
                     active = i
             since = t - c[active]["start"]
-            pop = 1.0 + 0.18 * max(0.0, 1 - since / 0.15)  # quick "pop" when a word is spoken
-            texts = tuple(re.sub(r"[.,!?;:]+$", "", w["text"]).upper() for w in c)
+            pop = 1.0 + 0.18 * max(0.0, 1 - since / 0.15) if style.pop else 1.0  # quick "pop" on each word
+            texts = tuple(re.sub(r"[.,!?;:]+$", "", w["text"]) for w in c)
+            if style.uppercase:
+                texts = tuple(t.upper() for t in texts)
             return texts, active, round(pop, 2)
     return None
 
 
-def overlay(frame, bgra, y):
+def overlay(frame, bgra, centre_y):
+    """Alpha-blend bgra onto frame, vertically centred on centre_y and clipped to the frame."""
     h, w = bgra.shape[:2]
+    y = int(np.clip(centre_y - h / 2, 0, max(frame.shape[0] - h, 0)))
+    bgra = bgra[: frame.shape[0] - y]
+    h = bgra.shape[0]
     region = frame[y:y + h, :w].astype(np.float32)
     alpha = bgra[:, :, 3:4].astype(np.float32) / 255.0
     frame[y:y + h, :w] = (region * (1 - alpha) + bgra[:, :, :3] * alpha).astype(np.uint8)
 
 
+def caption_preview(style, background=None):
+    """A 1080x1920 BGR frame showing the caption style, for the web page's live preview."""
+    if background is None:
+        grad = np.linspace(70, 25, OUT_H, dtype=np.uint8)[:, None, None]
+        background = np.repeat(np.repeat(grad, OUT_W, axis=1), 3, axis=2)
+    frame = background.copy()
+    words = tuple("Make your captions pop like this".split())[: max(style.words, 1)]
+    if style.uppercase:
+        words = tuple(w.upper() for w in words)
+    overlay(frame, render_caption(words, min(1, len(words) - 1), 1.0, style), OUT_H * style.position / 100)
+    return frame
+
+
 # ---------------------------------------------------------------- 6. render
 
-def render_clip(video, clip, words, out_path, src_w, src_h, on_progress=lambda f: None):
+def render_clip(video, clip, words, out_path, src_w, src_h, style, on_progress=lambda f: None):
     """on_progress(frac) reports 0..1 for this clip: face tracking ~30%, rendering ~70%."""
     start, dur = clip["start"], clip["end"] - clip["start"]
     centre = track_speaker(video, start, dur, src_w, src_h, lambda f: on_progress(0.3 * f))
-    chunks = build_chunks(words, clip["start"], clip["end"])
+    chunks = build_chunks(words, clip["start"], clip["end"], max_words=style.words)
 
     crop_w = min(src_w, int(round(src_h * 9 / 16 / 2) * 2))
     enc = subprocess.Popen(
@@ -593,14 +675,14 @@ def render_clip(video, clip, words, out_path, src_w, src_h, on_progress=lambda f
          "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest",
          "-movflags", "+faststart", str(out_path)],
         stdin=subprocess.PIPE)
-    cap_y = int(OUT_H * 0.66)
+    cap_y = OUT_H * style.position / 100
     for i, frame in enumerate(read_frames(video, start, dur, src_w, src_h, FPS)):
         on_progress(0.3 + 0.7 * min(i / (dur * FPS), 1))
-        x0 =int(np.clip(centre(i) - crop_w / 2, 0, src_w - crop_w))
+        x0 = int(np.clip(centre(i) - crop_w / 2, 0, src_w - crop_w))
         out = cv2.resize(frame[:, x0:x0 + crop_w], (OUT_W, OUT_H), interpolation=cv2.INTER_LINEAR)
-        state = caption_state(chunks, i / FPS)
+        state = caption_state(chunks, i / FPS, style)
         if state:
-            overlay(out, render_caption(*state), cap_y)
+            overlay(out, render_caption(*state, style), cap_y)
         enc.stdin.write(out.tobytes())
     enc.stdin.close()
     enc.wait()
@@ -616,7 +698,34 @@ def main():
     ap.add_argument("--max", type=float, default=60, help="max clip length in seconds")
     ap.add_argument("--whisper", choices=WHISPER_MODELS, default="turbo")
     ap.add_argument("--no-llm", action="store_true", help="use the heuristic picker even if Claude is configured")
+    cap = ap.add_argument_group("caption style")
+    d = CaptionStyle()
+    cap.add_argument("--font", default=d.font, help=f"caption font (default {d.font}); see --list-fonts")
+    cap.add_argument("--font-size", type=int, default=d.size, help=f"px on the 1080x1920 frame (default {d.size})")
+    cap.add_argument("--text-color", default=d.text_color, help=f"hex colour (default {d.text_color})")
+    cap.add_argument("--highlight", default=d.highlight, help=f"spoken-word colour (default {d.highlight})")
+    cap.add_argument("--outline-color", default=d.outline_color)
+    cap.add_argument("--outline", type=int, default=d.outline, help=f"outline width px, 0 = none (default {d.outline})")
+    cap.add_argument("--caption-pos", type=int, default=d.position, help=f"%% from top (default {d.position})")
+    cap.add_argument("--words", type=int, default=d.words, help=f"max words on screen (default {d.words})")
+    cap.add_argument("--no-uppercase", action="store_true")
+    cap.add_argument("--no-pop", action="store_true", help="don't enlarge the spoken word")
+    ap.add_argument("--list-fonts", action="store_true", help="print available caption fonts and exit")
+    if "--list-fonts" in sys.argv:
+        print("\n".join(available_fonts()))
+        return
     args = ap.parse_args()
+
+    fonts = available_fonts()
+    if args.font not in fonts:
+        sys.exit(f"Unknown font '{args.font}'. Available: {', '.join(fonts)}")
+    for c in (args.text_color, args.highlight, args.outline_color):
+        if not re.fullmatch(r"#?[0-9a-fA-F]{6}", c):
+            sys.exit(f"Colours must be hex like #FFE500, got '{c}'")
+    style = CaptionStyle(font=args.font, size=max(30, min(200, args.font_size)), text_color=args.text_color,
+                         highlight=args.highlight, outline_color=args.outline_color,
+                         outline=max(0, min(30, args.outline)), position=max(5, min(95, args.caption_pos)),
+                         words=max(1, min(6, args.words)), uppercase=not args.no_uppercase, pop=not args.no_pop)
 
     repo = WHISPER_MODELS[args.whisper]
     use_llm = not args.no_llm and bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
@@ -669,7 +778,7 @@ def main():
         log(f"Rendering {path.name}  [{clip['start']:.1f}s - {clip['end']:.1f}s]  score {clip['score']}  "
             f"\"{clip['title']}\"")
         dur = clip["end"] - clip["start"]
-        render_clip(video, clip, words, path, src_w, src_h,
+        render_clip(video, clip, words, path, src_w, src_h, style,
                     lambda f, d=done_secs, dur=dur: PROGRESS("render", (d + f * dur) / total_secs))
         done_secs += dur
         clip["file"] = str(path)

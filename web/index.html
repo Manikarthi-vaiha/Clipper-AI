@@ -62,6 +62,37 @@
   .dl { margin-top: auto; text-align: center; text-decoration: none; font-weight: 600; font-size: 14px;
         color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 8px; }
   .dl:hover { border-color: var(--accent); }
+  details.style { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; }
+  details.style summary { cursor: pointer; font-weight: 650; list-style: none; display: flex; align-items: center; gap: 8px; }
+  details.style summary::-webkit-details-marker { display: none; }
+  details.style summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+  details.style[open] summary::before { transform: rotate(90deg); }
+  details.style summary small { color: var(--muted); font-weight: 400; }
+  .style-body { display: flex; gap: 24px; margin-top: 16px; align-items: flex-start; }
+  .controls { flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px 18px; min-width: 0; }
+  .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+  .field.wide { grid-column: 1 / -1; }
+  .field span { display: flex; justify-content: space-between; }
+  .field output { color: var(--text); font-variant-numeric: tabular-nums; }
+  .field select { font: inherit; font-size: 15px; color: var(--text); background: var(--bg);
+                  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .field input[type=range] { accent-color: var(--accent); width: 100%; }
+  .swatches { display: flex; gap: 14px; flex-wrap: wrap; }
+  .swatch { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .swatch input { width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 8px;
+                  background: none; cursor: pointer; }
+  .checks { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; color: var(--muted); }
+  .checks label { display: flex; align-items: center; gap: 8px; }
+  .presets { display: flex; gap: 8px; flex-wrap: wrap; }
+  .presets button { font-size: 13px; font-weight: 600; padding: 6px 12px; background: var(--track); color: var(--text); }
+  .presets button:hover { outline: 2px solid var(--accent); }
+  .reset { background: none !important; color: var(--muted) !important; text-decoration: underline; }
+  .preview { width: 200px; flex: none; position: sticky; top: 12px; }
+  .preview img { width: 100%; aspect-ratio: 9/16; border-radius: 12px; background: #222; display: block;
+                 border: 1px solid var(--line); transition: opacity .15s; }
+  .preview img.loading { opacity: .6; }
+  .preview p { margin: 6px 0 0; font-size: 12px; color: var(--muted); text-align: center; }
+  @media (max-width: 700px) { .style-body { flex-direction: column-reverse; } .preview { width: 160px; align-self: center; position: static; } }
   @media (max-width: 560px) { .row { flex-direction: column; } button { padding: 12px; } h1 { font-size: 28px; } }
 </style>
 </head>
@@ -81,6 +112,41 @@
       <label>Max length (s) <input id="max" type="number" min="15" max="180" value="60"></label>
       <label><input id="fast" type="checkbox" style="width:auto"> Fast mode (quicker, less accurate captions)</label>
     </div>
+
+    <details class="style" id="styleBox">
+      <summary>Caption style <small id="styleSummary"></small></summary>
+      <div class="style-body">
+        <div class="controls">
+          <div class="field wide"><span>Presets</span>
+            <div class="presets" id="presets"></div>
+          </div>
+          <label class="field">Font <select id="s_font"></select></label>
+          <label class="field"><span>Size <output id="o_size"></output></span>
+            <input id="s_size" type="range" min="40" max="160" step="2"></label>
+          <label class="field"><span>Position <output id="o_position"></output></span>
+            <input id="s_position" type="range" min="10" max="90"></label>
+          <label class="field"><span>Words on screen <output id="o_words"></output></span>
+            <input id="s_words" type="range" min="1" max="6"></label>
+          <label class="field"><span>Outline width <output id="o_outline"></output></span>
+            <input id="s_outline" type="range" min="0" max="24"></label>
+          <div class="field"><span>Colours</span>
+            <div class="swatches">
+              <label class="swatch"><input id="s_text_color" type="color"> Text</label>
+              <label class="swatch"><input id="s_highlight" type="color"> Spoken word</label>
+              <label class="swatch"><input id="s_outline_color" type="color"> Outline</label>
+            </div>
+          </div>
+          <div class="field wide">
+            <div class="checks">
+              <label><input id="s_uppercase" type="checkbox"> ALL CAPS</label>
+              <label><input id="s_pop" type="checkbox"> Pop the spoken word</label>
+              <button type="button" class="reset" id="resetStyle">Reset to default</button>
+            </div>
+          </div>
+        </div>
+        <div class="preview"><img id="preview" alt="Caption preview"><p>Live preview</p></div>
+      </div>
+    </details>
   </form>
 
   <section id="status">
@@ -162,13 +228,83 @@ async function poll(id) {
   if (job.status === "done") renderClips(job.clips);
 }
 
+// ---- caption style
+const STYLE_KEYS = ["font", "size", "position", "words", "outline", "text_color", "highlight", "outline_color", "uppercase", "pop"];
+const PRESETS = {
+  "Classic yellow": {font: "Arial Black", text_color: "#FFFFFF", highlight: "#FFE500", outline_color: "#000000", outline: 9, uppercase: true, pop: true, words: 3},
+  "Bold green": {font: "SF Pro Heavy", text_color: "#FFFFFF", highlight: "#2BFF6A", outline_color: "#000000", outline: 10, uppercase: true, pop: true, words: 3},
+  "Impact": {font: "Impact", text_color: "#FFFFFF", highlight: "#FF3B30", outline_color: "#000000", outline: 8, uppercase: true, pop: true, words: 2},
+  "One word": {font: "Futura Condensed ExtraBold", text_color: "#FFFFFF", highlight: "#FFFFFF", outline_color: "#000000", outline: 12, uppercase: true, pop: true, words: 1, size: 120},
+  "Clean": {font: "Avenir Next Heavy", text_color: "#FFFFFF", highlight: "#7CC8FF", outline_color: "#1A1A1A", outline: 6, uppercase: false, pop: false, words: 4, size: 72},
+  "Playful": {font: "SF Pro Rounded Heavy", text_color: "#FFFFFF", highlight: "#FF5FD2", outline_color: "#2B0A3D", outline: 10, uppercase: false, pop: true, words: 3},
+};
+let DEFAULT_STYLE = null, previewTimer = null;
+
+function readStyle() {
+  const st = {};
+  for (const k of STYLE_KEYS) {
+    const el = $("s_" + k);
+    st[k] = el.type === "checkbox" ? el.checked : el.type === "range" ? +el.value : el.value;
+  }
+  return st;
+}
+
+function writeStyle(st) {
+  for (const k of STYLE_KEYS) {
+    if (st[k] === undefined) continue;
+    const el = $("s_" + k);
+    if (el.type === "checkbox") el.checked = !!st[k]; else el.value = st[k];
+  }
+  styleChanged();
+}
+
+function styleChanged() {
+  const st = readStyle();
+  $("o_size").textContent = st.size + " px";
+  $("o_position").textContent = st.position + "% from top";
+  $("o_words").textContent = st.words;
+  $("o_outline").textContent = st.outline ? st.outline + " px" : "none";
+  $("styleSummary").textContent = "· " + st.font;
+  save("style", JSON.stringify(st));
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {
+    $("preview").classList.add("loading");
+    $("preview").src = "/api/preview?" + new URLSearchParams(st);
+  }, 120);
+}
+
+async function initStyle() {
+  const r = await fetch("/api/fonts");
+  const data = await r.json();
+  DEFAULT_STYLE = data.default;
+  $("s_font").innerHTML = data.fonts.map(f => `<option></option>`).join("");
+  [...$("s_font").options].forEach((o, i) => { o.value = o.textContent = data.fonts[i]; });
+  $("presets").innerHTML = Object.keys(PRESETS).map(n => `<button type="button"></button>`).join("");
+  [...$("presets").children].forEach((b, i) => {
+    const name = Object.keys(PRESETS)[i];
+    b.textContent = name;
+    b.onclick = () => writeStyle({...DEFAULT_STYLE, ...PRESETS[name]});
+  });
+  let saved = null;
+  try { saved = JSON.parse(load("style")); } catch (e) {}
+  if (saved && !data.fonts.includes(saved.font)) saved.font = DEFAULT_STYLE.font;
+  writeStyle({...DEFAULT_STYLE, ...(saved || {})});
+  if (load("styleOpen") === "1") $("styleBox").open = true;
+}
+
+$("preview").addEventListener("load", () => $("preview").classList.remove("loading"));
+$("styleBox").addEventListener("toggle", () => save("styleOpen", $("styleBox").open ? "1" : "0"));
+$("resetStyle").addEventListener("click", () => writeStyle(DEFAULT_STYLE));
+for (const k of STYLE_KEYS) $("s_" + k).addEventListener("input", styleChanged);
+initStyle();
+
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
   $("go").disabled = true;
   $("grid").innerHTML = "";
   const r = await fetch("/api/jobs", {
     method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({url: $("url").value, num: +$("num").value, min: +$("min").value, max: +$("max").value, fast: $("fast").checked}),
+    body: JSON.stringify({url: $("url").value, num: +$("num").value, min: +$("min").value, max: +$("max").value, fast: $("fast").checked, style: readStyle()}),
   });
   const data = await r.json();
   if (!r.ok) {

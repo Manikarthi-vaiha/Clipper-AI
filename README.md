@@ -50,6 +50,24 @@ Open http://localhost:8765, paste a link and press **Get clips**. The page shows
 | `--whisper` | `turbo` | `small` is faster but less accurate |
 | `--no-llm` | off | use the built-in scorer even if Claude is configured |
 
+#### Caption style
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--font` | Arial Black | caption font — `--list-fonts` shows all 24 built-in choices |
+| `--font-size` | 86 | px on the 1080×1920 frame |
+| `--text-color` / `--highlight` / `--outline-color` | `#FFFFFF` / `#FFE500` / `#000000` | hex colours; highlight is the word being spoken |
+| `--outline` | 9 | outline width in px (0 = none) |
+| `--caption-pos` | 70 | vertical position, % from the top |
+| `--words` | 3 | max words on screen at once |
+| `--no-uppercase` / `--no-pop` | | keep original casing / don't enlarge the spoken word |
+
+Example: `--font "Futura Condensed ExtraBold" --highlight "#FF3B30" --words 2`
+
+**Custom fonts:** drop any `.ttf` or `.otf` file into the `fonts/` folder and it appears in the list (and in the web page's font menu).
+
+The web page has the same options under **Caption style**, with presets and a live preview.
+
 A local video file works in place of a URL. Output goes to `clips/<video-id>/` along with `clips.json` (titles, scores, timestamps). Downloads and transcripts are cached in `work/`, so re-running a video skips straight to rendering.
 
 ### Better clip picking with Claude (optional)
